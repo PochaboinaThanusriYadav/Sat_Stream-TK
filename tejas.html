@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>CanSat Dashboard GUI</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <audio id="beepSound" src="https://freesound.org/data/previews/341/341695_5260877-lq.mp3" preload="auto"></audio>
+  <div id="toast" class="fixed bottom-5 right-5 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg hidden z-50 transition-opacity duration-500">
+  🛰️ <span id="toastText">Flight Software State changed</span>
+</div>
+
+  <style>
+    .card {
+      background-color: white;
+      border-radius: 0.5rem;
+      padding: 1rem;
+      box-shadow: 0 0 10px white;
+    }
+    .three-canvas {
+      width: 100%;
+      height: 200px;
+    }
+    canvas {
+      width: 100% !important;
+      height: 200px !important;
+    }
+  </style>
+</head>
+<body class="bg-gray-900 text-black-400">
+  <div class="flex">
+    <aside class="w-72 bg-gray-800 p-6 space-y-4">
+      <h1 class="text-2xl font-bold text-yellow-400">GCS Dashboard</h1>
+      <p class="text-sm text-yellow-400">TEAM TEJAS</p>
+      <div class="card">
+        <h2 class="font-semibold mb-1">System Status</h2>
+        <p>STATUS: <span id="status" class="text-red-500 font-bold">DISCONNECTED 🔴</span></p>
+        <p>MISSION TIME: <span id="missionTime">00:00:00</span></p>
+        <p>PACKETS: <span id="packetCount">0</span></p>
+        <button onclick="startSimulation()" class="mt-3 w-full bg-green-600 hover:bg-green-700 text-white py-2 rounded">Start Simulation</button>
+        <button onclick="stopSimulation()" class="mt-2 w-full bg-red-600 hover:bg-red-700 text-white py-2 rounded">Stop Simulation</button>
+      </div>
+      <button onclick="downloadCSV()" class="mt-2 w-full bg-blue-500 hover:bg-blue-600 text-white py-2 rounded">Download CSV</button>
+      <div class="grid grid-cols-2 gap-2">
+        <div class="bg-white text-center text-black-400 p-4 rounded-lg shadow-md"><span id="altVal" class="text-2xl font-bold">0.0</span><div class="text-xs text-red-500 mt-1">ALTITUDE (M)</div></div>
+        <div class="bg-white text-center text-black-400 p-4 rounded-lg shadow-md"><span id="tempVal" class="text-2xl font-bold">0.0</span><div class="text-xs text-red-500 mt-1">TEMP (°C)</div></div>
+        <div class="bg-white text-center text-black-400 p-4 rounded-lg shadow-md"><span id="presVal" class="text-2xl font-bold">0.0</span><div class="text-xs text-red-500 mt-1">PRESSURE (HPA)</div></div>
+        <div class="bg-white text-center text-black-400 rounded-lg shadow-md"><span id="humVal" class="text-2xl font-bold">0.0</span><div class="text-xs text-red-500 mt-1">HUMIDITY (%)</div></div>
+        <div class="bg-white text-center text-black-400 rounded-lg shadow-md col-span-2"><span id="satVal" class="text-2xl font-bold">0</span><div class="text-xs text-red-500 mt-1">GPS SATELLITES</div></div>
+        <div class="bg-white text-center text-black-400 rounded-lg shadow-md col-span-2"><span id="gpsLoc" class="text-sm">0.0000, 0.0000</span><div class="text-xs text-red-500 mt-1">GPS LOCATION</div></div>
+      </div>
+    </aside>
+
+    <main class="flex-1 p-6 grid grid-cols-3 gap-4">
+      <div class="card"><h3>Altitude</h3><canvas id="altChart"></canvas></div>
+      <div class="card"><h3>GNSS Satellites</h3><canvas id="gnssChart"></canvas></div>
+      <div class="card"><h3>Pressure</h3><canvas id="presChart"></canvas></div>
+      <div class="card"><h3>Temperature</h3><canvas id="tempChart"></canvas></div>
+      <div class="card"><h3>Humidity</h3><canvas id="humChart"></canvas></div>
+      <div class="card col-span-1">
+        <h3>Attitude (IMU)</h3>
+        <div id="imu3d" class="three-canvas"></div>
+        <div class="text-sm text-center mt-2">
+          Roll: <span id="roll">0.0°</span> | Pitch: <span id="pitch">0.0°</span> | Yaw: <span id="yaw">0.0°</span>
+        </div>
+      </div>
+      <div class="card col-span-2">
+  <h3>GPS Location</h3>
+  <div id="map" style="height: 200px; border-radius: 0.5rem;"></div>
+</div>
+
+<div class="card col-span-1">
+  <h3>Flight Software</h3>
+  <p class="mt-2 text-sm text-gray-700">Current State:</p>
+  <p id="softwareState" class="text-lg font-bold text-blue-600">PRELAUNCH</p>
+  <div class="grid grid-cols-2 gap-2 mt-4">
+    <button onclick="setState('ASCENT')" class="bg-blue-500 hover:bg-blue-600 text-white py-1 rounded">ASCENT</button>
+    <button onclick="setState('RELEASE')" class="bg-blue-500 hover:bg-blue-600 text-white py-1 rounded">RELEASE</button>
+    <button onclick="setState('DESCENT')" class="bg-blue-500 hover:bg-blue-600 text-white py-1 rounded">DESCENT</button>
+    <button onclick="setState('PARACHUTE')" class="bg-blue-500 hover:bg-blue-600 text-white py-1 rounded">PARACHUTE</button>
+    <button onclick="setState('LANDING')" class="bg-blue-500 hover:bg-blue-600 text-white py-1 rounded col-span-2">LANDING</button>
+  </div>
+</div>
+
+      </div>
+    </main>
+  </div>
+
+  <script>
+    let csvLog = [["Time", "Altitude", "Pressure", "Temperature", "Humidity", "Satellites"]];
+    let packetCount = 0;
+    let startTime, missionTimer = null, dataInterval = null;
+    let map, marker;
+    let roll = 0, pitch = 0, yaw = 0;
+
+    function downloadCSV() {
+      const csvContent = "data:text/csv;charset=utf-8," + csvLog.map(e => e.join(",")).join("\n");
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", "CanSat_Telemetry_Log.csv");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    const altChart = new Chart(document.getElementById("altChart"), {
+  type: "line",
+  data: {
+    labels: [],
+    datasets: [{
+      label: "Altitude (m)",
+      data: [],
+      borderColor: "orange",
+      fill: false
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: { y: { beginAtZero: true } },
+    plugins: {
+      zoom: {
+        pan: {
+          enabled: true,
+          mode: 'x'
+        },
+        zoom: {
+          wheel: {
+            enabled: true
+          },
+          pinch: {
+            enabled: true
+          },
+          mode: 'x'
+        }
+      }
+    }
+  }
+});
+const presChart = new Chart(document.getElementById("presChart"), {
+  type: "line",
+  data: {
+    labels: [],
+    datasets: [{
+      label: "Pressure (hPa)",
+      data: [],
+      borderColor: "blue",
+      fill: false
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: { y: { beginAtZero: true } },
+    plugins: {
+      zoom: {
+        pan: {
+          enabled: true,
+          mode: 'x'
+        },
+        zoom: {
+          wheel: {
+            enabled: true
+          },
+          pinch: {
+            enabled: true
+          },
+          mode: 'x'
+        }
+      }
+    }
+  }
+});
+const tempChart = new Chart(document.getElementById("tempChart"), {
+  type: "line",
+  data: {
+    labels: [],
+    datasets: [{
+      label: "Temp (°C)",
+      data: [],
+      borderColor: "red",
+      fill: false
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: { y: { beginAtZero: true } },
+    plugins: {
+      zoom: {
+        pan: {
+          enabled: true,
+          mode: 'x'
+        },
+        zoom: {
+          wheel: {
+            enabled: true
+          },
+          pinch: {
+            enabled: true
+          },
+          mode: 'x'
+        }
+      }
+    }
+  }
+});
+
+const humChart = new Chart(document.getElementById("humChart"), {
+  type: "line",
+  data: {
+    labels: [],
+    datasets: [{
+      label: "Humidity (%)",
+      data: [],
+      borderColor: "purple",
+      fill: false
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: { y: { beginAtZero: true } },
+    plugins: {
+      zoom: {
+        pan: {
+          enabled: true,
+          mode: 'x'
+        },
+        zoom: {
+          wheel: {
+            enabled: true
+          },
+          pinch: {
+            enabled: true
+          },
+          mode: 'x'
+        }
+      }
+    }
+  }
+});
+const gnssChart = new Chart(document.getElementById("gnssChart"), {
+  type: "line",
+  data: {
+    labels: [],
+    datasets: [{
+      label: "Satellites",
+      data: [],
+      borderColor: "lime",
+      fill: false
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: { y: { beginAtZero: true } },
+    plugins: {
+      zoom: {
+        pan: {
+          enabled: true,
+          mode: 'x'
+        },
+        zoom: {
+          wheel: {
+            enabled: true
+          },
+          pinch: {
+            enabled: true
+          },
+          mode: 'x'
+        }
+      }
+    }
+  }
+});
+    function updateChart(chart, value) {
+      const time = new Date().toLocaleTimeString();
+      chart.data.labels.push(time);
+      chart.data.datasets[0].data.push(value);
+      if (chart.data.labels.length > 15) {
+        chart.data.labels.shift();
+        chart.data.datasets[0].data.shift();
+      }
+      chart.update();
+    }
+
+    function startSimulation() {
+      if (dataInterval) return;
+      document.getElementById("status").innerHTML = `<span class="text-green-500 font-bold">CONNECTED 🟢</span>`;
+      startTime = Date.now();
+      missionTimer = setInterval(updateMissionTime, 1000);
+
+      dataInterval = setInterval(() => {
+        const alt = +(Math.random() * 500 + 100).toFixed(2);
+        const pres = +(Math.random() * 10 + 1000).toFixed(2);
+        const temp = +(Math.random() * 10 + 20).toFixed(2);
+        const hum = +(Math.random() * 30 + 40).toFixed(2);
+        const sats = Math.floor(Math.random() * 10 + 3);
+        const lat = 17.385 + Math.random() * 0.01;
+        const lon = 78.486 + Math.random() * 0.01;
+        roll = +(Math.random() * 360).toFixed(1);
+        pitch = +(Math.random() * 360).toFixed(1);
+        yaw = +(Math.random() * 360).toFixed(1);
+        const time = new Date().toLocaleTimeString();
+        csvLog.push([time, alt, pres, temp, hum, sats]);
+
+        document.getElementById("altVal").innerText = alt;
+        document.getElementById("tempVal").innerText = temp;
+        document.getElementById("presVal").innerText = pres;
+        document.getElementById("humVal").innerText = hum;
+        document.getElementById("satVal").innerText = sats;
+        document.getElementById("gpsLoc").innerText = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+        document.getElementById("roll").innerText = roll + "°";
+        document.getElementById("pitch").innerText = pitch + "°";
+        document.getElementById("yaw").innerText = yaw + "°";
+
+        updateChart(altChart, alt);
+        updateChart(presChart, pres);
+        updateChart(tempChart, temp);
+        updateChart(humChart, hum);
+        updateChart(gnssChart, sats);
+
+        marker.setLatLng([lat, lon]);
+        map.setView([lat, lon]);
+
+        packetCount++;
+        document.getElementById("packetCount").innerText = packetCount;
+      }, 1000);
+    }
+
+    function stopSimulation() {
+      if (dataInterval) clearInterval(dataInterval);
+      if (missionTimer) clearInterval(missionTimer);
+      dataInterval = null;
+      missionTimer = null;
+      document.getElementById("status").innerHTML = `<span class="text-yellow-400 font-bold">STOPPED ⏸️</span>`;
+    }
+
+    function updateMissionTime() {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      const hrs = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+      const mins = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+      const secs = String(elapsed % 60).padStart(2, '0');
+      document.getElementById("missionTime").innerText = `${hrs}:${mins}:${secs}`;
+    }
+
+    function initMap() {
+      map = L.map('map').setView([17.385, 78.486], 14);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+      marker = L.marker([17.385, 78.486]).addTo(map);
+    }
+
+    function init3D() {
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(75, 2, 0.1, 1000);
+      const renderer = new THREE.WebGLRenderer({ alpha: true });
+      const container = document.getElementById("imu3d");
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      container.appendChild(renderer.domElement);
+
+      const geometry = new THREE.BoxGeometry();
+      const material = new THREE.MeshNormalMaterial();
+      const cube = new THREE.Mesh(geometry, material);
+      scene.add(cube);
+      camera.position.z = 2;
+
+      function animate() {
+        requestAnimationFrame(animate);
+        cube.rotation.x = THREE.MathUtils.degToRad(pitch);
+        cube.rotation.y = THREE.MathUtils.degToRad(yaw);
+        cube.rotation.z = THREE.MathUtils.degToRad(roll);
+        renderer.render(scene, camera);
+      }
+      animate();
+    }
+
+     function sendCommand(cmd) {
+  document.getElementById("lastCommand").innerText = cmd;
+  console.log("Command sent:", cmd);
+  alert("🛰️ Command Sent: " + cmd); 
+ 
+}
+
+    window.onload = () => {
+      initMap();
+      init3D();
+    };
+    function setState(state) {
+  document.getElementById("softwareState").innerText = state;
+  showToast("Flight Software State changed to: " + state);
+  const sound = document.getElementById("beepSound");
+  sound.currentTime = 0; 
+  sound.play();
+  console.log("Flight Software State changed to:", state);
+}
+
+function showToast(message) {
+  const toast = document.getElementById("toast");
+  const toastText = document.getElementById("toastText");
+  toastText.innerText = message;
+  
+  toast.classList.remove("hidden");
+  toast.style.opacity = 1;
+  setTimeout(() => {
+    toast.style.opacity = 0;
+    setTimeout(() => toast.classList.add("hidden"), 500);
+  }, 3000);
+}
+</script>
+</body>
+</html>
